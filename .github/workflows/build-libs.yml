@@ -1,0 +1,117 @@
+name: Build Libraries
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - x86_64-unknown-linux-gnu
+          - aarch64-unknown-linux-gnu
+          - riscv64gc-unknown-linux-gnu
+        include:
+          - target: x86_64-unknown-linux-gnu
+            output_dir: linux_amd64
+          - target: aarch64-unknown-linux-gnu
+            output_dir: linux_arm64
+          - target: riscv64gc-unknown-linux-gnu
+            output_dir: linux_riscv64
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+      - name: Build for ${{ matrix.target }}
+        run: |
+          cross build --release --target ${{ matrix.target }}
+          mkdir -p lib/${{ matrix.output_dir }}
+          cp target/${{ matrix.target }}/release/libnumbat_cgo.a lib/${{ matrix.output_dir }}/
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lib-${{ matrix.output_dir }}
+          path: lib/${{ matrix.output_dir }}/libnumbat_cgo.a
+  build-darwin:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - name: Build for macOS ARM64
+        run: |
+          cargo build --release --target aarch64-apple-darwin
+          mkdir -p lib/darwin_arm64
+          cp target/aarch64-apple-darwin/release/libnumbat_cgo.a lib/darwin_arm64/
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lib-darwin_arm64
+          path: lib/darwin_arm64/libnumbat_cgo.a
+  build-windows:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Install cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+      - name: Build for Windows
+        run: |
+          cross build --release --target x86_64-pc-windows-gnu
+          mkdir -p lib/windows_amd64
+          cp target/x86_64-pc-windows-gnu/release/libnumbat_cgo.a lib/windows_amd64/
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lib-windows_amd64
+          path: lib/windows_amd64/libnumbat_cgo.a
+  commit:
+    needs: [build, build-darwin, build-windows]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: lib-*
+          merge-multiple: false
+      - name: Organize libraries
+        run: |
+          mkdir -p lib/linux_amd64 lib/linux_arm64 lib/linux_riscv64 lib/darwin_arm64 lib/windows_amd64
+          cp artifacts/lib-linux_amd64/libnumbat_cgo.a lib/linux_amd64/ 2>/dev/null || echo "linux_amd64 not found"
+          cp artifacts/lib-linux_arm64/libnumbat_cgo.a lib/linux_arm64/ 2>/dev/null || echo "linux_arm64 not found"
+          cp artifacts/lib-linux_riscv64/libnumbat_cgo.a lib/linux_riscv64/ 2>/dev/null || echo "linux_riscv64 not found"
+          cp artifacts/lib-darwin_arm64/libnumbat_cgo.a lib/darwin_arm64/ 2>/dev/null || echo "darwin_arm64 not found"
+          cp artifacts/lib-windows_amd64/libnumbat_cgo.a lib/windows_amd64/ 2>/dev/null || echo "windows_amd64 not found"
+      - name: Commit and push changes
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          # Check if there are any changes
+          if git diff --quiet HEAD -- lib/; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          git add lib/
+          git commit -m "Update built libraries [skip ci]"
+          git push

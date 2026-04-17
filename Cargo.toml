@@ -1,0 +1,18 @@
+[package]
+name = "numbat-cgo"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+# 'staticlib' generates .a files, which are ideal for Go
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+numbat = { git = "https://github.com/sharkdp/numbat" }
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
+codegen-units = 1
+panic = "abort"
